@@ -5,21 +5,22 @@
 void activateMotors(int, int);
 void stopMotors();
 // float calcDistance(int revs, float wheelDiameter = 3.4f); 
-void acitvateMotor(int dir, int pwmVal, int enableMotor, int in1, int in2);
+// void acitvateMotor(int dir, int pwmVal, int enableMotor, int in1, int in2);
+void acitvateMotor(int dir, int pwmVal, int enableMotor, int in1, int in2, int accelTo);
 void stopMotor(int motor);
 
 #define NMOTORS 2
 
+TrivialPID pid[NMOTORS];
+TrivialPID driftCorrection;
 // Variables to track motor positions
 volatile int motor1_position = 0;
 volatile int motor2_position = 0;
-volatile double posi[] = {0,0}; volatile double correction =0;
+volatile double posi[] = {0,0}; 
 volatile float distanceTravelled = 0.0;
 
 bool motorsState [NMOTORS] = {false, false};
-
-TrivialPID pid[NMOTORS];
-
+bool motorsAccelState [NMOTORS] = {true, true};
 bool motorRunning = false;
 
 long prevT = 0;
@@ -59,7 +60,7 @@ void ISR_motor()
     else
     {
         posi[m]--;
-}
+    }
 }
 
 void ISR_motor1_A()
@@ -111,8 +112,12 @@ void setup()
     pinMode(20, INPUT_PULLUP);
     pinMode(21, INPUT_PULLUP);
 
-    pid[0].setParams(0.95, 0.0, 0.0, 100);
-    pid[1].setParams(0.95, 0.122, 0.0, 100);
+    // pid[0].setParams(1.3, 0.0, 0.0, 100);
+    // pid[1].setParams(1.5, 0.122, 0.0, 100);
+
+    pid[0].setParams(1, 0.0, 0.0, 150);
+    pid[1].setParams(1, 0.0, 0.0, 150);
+    // driftCorrection.setParams(1,0,0,255);
 
     // Attach pin change interruptsu
     // attachInterrupt(digitalPinToInterrupt(18), ISR_motor1_A, RISING);
@@ -122,6 +127,12 @@ void setup()
 
     // stopMotors();
     // activateMotors(55, 1);
+
+    // acitvateMotor(-1,0, motorPWMPins[0], motorInPins[0][0], motorInPins[0][1], 150);
+    // acitvateMotor(-1,0, motorPWMPins[1], motorInPins[1][0], motorInPins[1][1], 150);
+    // delay(1000);
+    // stopMotors();
+
     delay(3000);
 
     Serial.println("Setup completed!");
@@ -131,7 +142,7 @@ void loop()
 {
 
     // set target position
-    int target[NMOTORS] = {2500, 2500};
+    int target[NMOTORS] = {4400, 4400};
     //   int target = 250*sin(prevT/1e6);
 
     // time difference
@@ -141,6 +152,7 @@ void loop()
 
     // int pos = 0;
     int pos[NMOTORS];
+    double correction[] = {0,0};
 
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
     {
@@ -148,50 +160,72 @@ void loop()
     //     distanceTravelled = calcDistance(averagePosition/4);
         for(int k = 0; k < NMOTORS; k++){
             pos[k] = posi[k];
-            // e[k] = pos[k] - target[k];
+
+            int drift = (posi[0] - posi[1]);
+            // int pwrDrift=0,dirDrift=0;
+            // driftCorrection.errorValue(drift,0,deltaT,pwrDrift,dirDrift);
+            // acitvateMotor(dirDrift,pwrDrift, motorPWMPins[k], \
+            // motorInPins[k][0], motorInPins[k][1], 255);
+            // Serial.print(drift); Serial.print("\t");
+            // Serial.print(pwrDrift); Serial.print("\t");
+            // Serial.print(dirDrift); Serial.print("\t");
+
+            if (pos[0] > pos[1]) 
+            {   
+                // correction[1] = drift;//exp(drift * 0.011470) * (0.961126);
+                // correction[0] = 0; //-exp(correction[1]);
+                pos[0] += drift * deltaT;
+                pos[1] += drift;
+            }
+            else if (pos[1] > pos[0]) {
+                // correction[0] = drift; //exp(drift * 0.011470) * (0.961126);
+                // correction[1] = 0;//-exp(correction[0]);
+                pos[1] += drift * deltaT;
+                pos[0] += drift;
+
+            }
+
+            // Serial.print(posi[k]); Serial.print("\t");
         }
     }
-    
-    // Serial.print(correction); Serial.print("\t");
-    // Serial.print(pos[0]); Serial.print("\t");
-    // Serial.print(pos[1]); Serial.print("\t");
 
     // loop through the motors
     for(int k = 0; k < NMOTORS; k++) {
-
-        if ((k==1) && (pos[1]>pos[0])) {
-        
-            int drift = pos[1] - pos[0];
-            correction = exp(drift * 0.011470) * (0.961126);
-            Serial.print(pos[0]); Serial.print("\t");
-            pos[0] =+ correction;
-            Serial.print(correction); Serial.print("\t");
-            Serial.print(pos[0]); Serial.print("\t");
-
-        }
 
         int pwr, dir;
         // evaluate the control signal
         pid[k].errorValue(pos[k],target[k],deltaT,pwr,dir);
         
-        acitvateMotor(dir,pwr, motorPWMPins[k], motorInPins[k][0], motorInPins[k][1]);
+        // if (correction[k]!=0) {
+        //     int pwrScaled = correction[k]; //map(correction[k], -1000, 1000, -255, 255);
+        //     // Serial.print(correction[k]); Serial.print("\t");
+        //     // Serial.print(pwr); Serial.print("\t");
+        //     pwr =- (pwrScaled);
+        //     // Serial.print(pwr); Serial.print("\t");
+
+        // }
+        
+        acitvateMotor(dir,pwr, motorPWMPins[k], motorInPins[k][0], motorInPins[k][1], 90);
+
+        // Serial.print(pwr); Serial.print("\t");
+
+        if (pos[k] >= target[k]) {stopMotor(k);}
 
     }
 
-    // for(int k = 0; k < NMOTORS; k++){
-    //     Serial.print(target[k]);
-    //     Serial.print(" \t ");
-    //     Serial.print(pos[k]);
-    //     Serial.print(" \t ");
-    // }
+    for(int k = 0; k < NMOTORS; k++){
+        Serial.print(target[k]);
+        Serial.print(" \t ");
+        Serial.print(pos[k]);
+        Serial.print(" \t ");
+    }
 
     Serial.println(":eol:");
 
 }
 
-void acitvateMotor(int dir, int pwmVal, int enableMotor, int in1, int in2){
+void acitvateMotor(int dir, int pwmVal, int enableMotor, int in1, int in2, int accelTo) {
     
-
     if (enableMotor == motorPWMPins[0]) {
 
         if(dir == 1){
@@ -225,10 +259,26 @@ void acitvateMotor(int dir, int pwmVal, int enableMotor, int in1, int in2){
 
         motorsState[1]= true;
     }
-
+    
     analogWrite(enableMotor, pwmVal);
 
-    // motorRunning = true;
+    // ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+    // Accelerate both motors simultaneously
+    // if (motorsAccelState[0] || motorsAccelState[1]) {
+    //     int minPWM = 20; // Minimum PWM value to overcome motor inertia
+    //     for (int pwm = minPWM; pwm <= accelTo; pwm++) {
+    //         analogWrite(motorPWMPins[0], pwm); // Motor 1
+    //         analogWrite(motorPWMPins[1], pwm); // Motor 2
+    //         delay(25);  // Adjust for smoother acceleration
+    //     }
+    //     motorsAccelState[0] = false;
+    //     motorsAccelState[1] = false;
+    // } else {
+    //     // Apply steady-state PWM
+    //     analogWrite(enableMotor, pwmVal);
+    // }
+    // }
+
 }
 
 void stopMotor(int motorNumber) {
@@ -311,6 +361,5 @@ float calcDistance(int revs, float wheelDiameter = 3.4f) {
     float wheelCircumfetence = PI * wheelDiameter;
 
     return (revs * wheelCircumfetence);
-
-    
 }
+
