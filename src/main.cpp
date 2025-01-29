@@ -28,8 +28,8 @@ bool motorRunning = false;
 
 long prevT = 0;
 
-const int encAPins[] = {2, 3};
-const int encBPins[] = {18, 19};
+const int encAPins[] = {18, 3};
+const int encBPins[] = {2, 19};
 
 const int motorPWMPins[] = {9, 8};
 const int motorInPins[2][2] = {
@@ -75,7 +75,10 @@ void setup()
     pinMode(3, INPUT_PULLUP);
 
     pid[0].setParams(1.75, 0.2, 0.0, 150);
-    pid[1].setParams(0.4999, 0.01, 0.0, 150);
+    pid[1].setParams(0.49999, 0.01, 0.0, 150);
+
+    // pid[0].setParams(1, 0, 0.0, 150);
+    // pid[1].setParams(1, 0, 0.0, 150);
 
     delay(3000);
 
@@ -128,13 +131,13 @@ void loop()
 
             drift = (posi[0] - posi[1]) ; 
 
-            // -6.790e-5 x^3 + 0.014 x^2 - 0.494 x + 8.767
-            float kernel = -6.181e-5 * pow(drift,3) + 0.0161 * pow(drift,2) \
-                                - 0.670 * drift + 8.533;
-            if (drift > 0) {
-                correction[1] =  kernel + drift;
-                correction[0] =  kernel - drift;
-            }
+            // // -6.790e-5 x^3 + 0.014 x^2 - 0.494 x + 8.767
+            // float kernel = -6.181e-5 * pow(drift,3) + 0.0161 * pow(drift,2) \
+            //                     - 0.670 * drift + 8.533;
+            // if (drift > 0) {
+            //     correction[1] =  kernel + drift;
+            //     correction[0] =  kernel - drift;
+            // }
             
             // Serial.print(kernel); Serial.print("\t");
             // Serial.print(drift); Serial.print("\t");
@@ -150,7 +153,7 @@ void loop()
         pid[k].errorValue(pos[k],target[k],deltaT,pwr,dir);
 
         // Serial.print(correction[k]); Serial.print("\t");
-        pos[k]=pos[k]+correction[k];
+        // pos[k]=pos[k]+correction[k];
         // Serial.print(pwr); Serial.print("\t");
 
         startMotor(dir,pwr, motorPWMPins[k], motorInPins[k][0], motorInPins[k][1], 90);
@@ -163,8 +166,8 @@ void loop()
     }
 
     for(int k = 0; k < NMOTORS; k++){
-        Serial.print(target[k]);
-        Serial.print(" \t ");
+        // Serial.print(target[k]);
+        // Serial.print(" \t ");
         Serial.print(pos[k]);
         Serial.print(" \t ");
     }
