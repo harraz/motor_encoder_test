@@ -1,6 +1,7 @@
 #include <util/atomic.h> // For the ATOMIC_BLOCK macro
 #include <TrivialPID.h>
 #include <Arduino.h>
+#include <basicMPU6050.h> 
 
 // float calcDistance(int revs, float wheelDiameter = 3.4f); 
 
@@ -37,6 +38,11 @@ const int motorInPins[2][2] = {
                                 {32, 34}  // Motor 2: in1[1] = 10, in2[1] = 12
                             };
 
+// Create MPU instance
+basicMPU6050<> imu;
+
+float prevZ=0;
+
 // Interrupt Service Routines (ISRs)
 template <int m>
 void ISR_motor()
@@ -60,6 +66,12 @@ void setup()
     // Serial.println(currentPWM);
     Serial.begin(9600);
 
+    // // Set registers - Always required
+    // imu.setup();
+
+    // // Initial calibration of gyro
+    // imu.setBias();
+
     pinMode(motorPWMPins[0], OUTPUT);
     pinMode(motorInPins[0][0], OUTPUT);
     pinMode(motorInPins[0][1], OUTPUT);
@@ -74,11 +86,11 @@ void setup()
     pinMode(2, INPUT_PULLUP);
     pinMode(3, INPUT_PULLUP);
 
-    pid[0].setParams(1.75, 0.2, 0.0, 150);
-    pid[1].setParams(0.49999, 0.01, 0.0, 150);
+    // pid[0].setParams(1.75, 0.2, 0.0, 135);
+    // pid[1].setParams(0.49999, 0.01, 0.0, 140);
 
-    // pid[0].setParams(1, 0, 0.0, 150);
-    // pid[1].setParams(1, 0, 0.0, 150);
+    pid[0].setParams(0.5, 0, 0.0, 135);
+    pid[1].setParams(0.499, 0.01, 0.0001, 140);
 
     delay(3000);
 
@@ -108,6 +120,13 @@ void setup()
 void loop()
 {
 
+    // // Update gyro calibration 
+    // imu.updateBias();
+
+    // prevZ -= imu.gz();
+    // Serial.print(prevZ);
+    // Serial.print(" \t ");
+
     // set target position
     int target[NMOTORS] = {2400, 2400};
     //   int target = 250*sin(prevT/1e6);
@@ -131,12 +150,12 @@ void loop()
 
             drift = (posi[0] - posi[1]) ; 
 
-            // // -6.790e-5 x^3 + 0.014 x^2 - 0.494 x + 8.767
+            // // // -6.790e-5 x^3 + 0.014 x^2 - 0.494 x + 8.767
             // float kernel = -6.181e-5 * pow(drift,3) + 0.0161 * pow(drift,2) \
             //                     - 0.670 * drift + 8.533;
             // if (drift > 0) {
-            //     correction[1] =  kernel + drift;
-            //     correction[0] =  kernel - drift;
+            //     correction[1] =  kernel + drift * (pow(deltaT, 2));
+            //     correction[0] =  kernel - drift / (pow(deltaT, 2));
             // }
             
             // Serial.print(kernel); Serial.print("\t");
@@ -166,8 +185,8 @@ void loop()
     }
 
     for(int k = 0; k < NMOTORS; k++){
-        // Serial.print(target[k]);
-        // Serial.print(" \t ");
+        Serial.print(target[k]);
+        Serial.print(" \t ");
         Serial.print(pos[k]);
         Serial.print(" \t ");
     }
