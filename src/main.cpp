@@ -10,14 +10,19 @@ void startMotor(int dir, int pwmVal, int enableMotor, int in1, int in2, int acce
 void stopMotor(int motor);
 void accelerateMotorsSimultaneously(const int* motorPins, int targetPWM, \
                                     int accelStep, int delayMs);
+long getDistance();
 
 #define NMOTORS 2
 
+const int TRIG_PIN = 23; // Trigger Pin
+const int ECHO_PIN = 22; // Echo Pin
+
 TrivialPID pid[NMOTORS];
 TrivialPID driftCorrection;
+
 // Variables to track motor positions
-volatile int motor1_position = 0;
-volatile int motor2_position = 0;
+// volatile int motor1_position = 0;
+// volatile int motor2_position = 0;
 volatile int posi[] = {0,0}; 
 volatile float distanceTravelled = 0.0;
 
@@ -29,13 +34,21 @@ bool motorRunning = false;
 
 long prevT = 0;
 
-const int encAPins[] = {18, 3};
-const int encBPins[] = {2, 19};
+// const int encAPins[] = {18, 3};
+// const int encBPins[] = {2, 19};
 
-const int motorPWMPins[] = {9, 8};
+const int encAPins[] = {2, 19};
+const int encBPins[] = {18, 3};
+
+const int motorPWMPins[] = {9, 8}; // blue wire then green wire
+// const int motorInPins[2][2] = {
+//                                 {42, 44},
+//                                 {32, 34}
+//                             };
+
 const int motorInPins[2][2] = {
-                                {42, 44},  // Motor 1: in1[0] = 8, in2[0] = 11
-                                {32, 34}  // Motor 2: in1[1] = 10, in2[1] = 12
+                                {44, 42},
+                                {34, 32}
                             };
 
 // Create MPU instance
@@ -86,11 +99,14 @@ void setup()
     pinMode(2, INPUT_PULLUP);
     pinMode(3, INPUT_PULLUP);
 
+    pinMode(TRIG_PIN, OUTPUT); // Set trigger pin to output
+    pinMode(ECHO_PIN, INPUT); // Set echo pin to input
+
     // pid[0].setParams(1.75, 0.2, 0.0, 135);
     // pid[1].setParams(0.49999, 0.01, 0.0, 140);
 
-    pid[0].setParams(0.5, 0, 0.0, 135);
-    pid[1].setParams(0.499, 0.01, 0.0001, 140);
+    pid[0].setParams(0.399, 0.01, 0.0001, 140);
+    pid[1].setParams(0.36, 0, 0.0001, 125);
 
     delay(3000);
 
@@ -100,20 +116,20 @@ void setup()
 
     Serial.println("Setup completed!");
 
-    if (motorsAccelState[0])
-    {
-        for(int k = 0; k < NMOTORS; k++){
-            activateMotor(1,motorInPins[k][0],motorInPins[k][1]);
-            // Serial.println(k);
-            // delay(2000);
-        }
-        accelerateMotorsSimultaneously(motorPWMPins, 90, 1, 1500);
-        // delay(1000);
-        // Serial.print("simultan fisnish");
-        motorsAccelState[0]=false;
+    // if (motorsAccelState[0])
+    // {
+    //     for(int k = 0; k < NMOTORS; k++){
+    //         activateMotor(1,motorInPins[k][0],motorInPins[k][1]);
+    //         // Serial.println(k);
+    //         // delay(2000);
+    //     }
+    //     accelerateMotorsSimultaneously(motorPWMPins, 100, 1, 5000);
+    //     // delay(1000);
+    //     // Serial.print("simultan fisnish");
+    //     motorsAccelState[0]=false;
 
-        posi[0] = 0; posi[1]=0;
-    }
+    //     // posi[0] = 0; posi[1]=0;
+    // }
 
 }
 
@@ -151,7 +167,7 @@ void loop()
             drift = (posi[0] - posi[1]) ; 
 
             // // // -6.790e-5 x^3 + 0.014 x^2 - 0.494 x + 8.767
-            // float kernel = -6.181e-5 * pow(drift,3) + 0.0161 * pow(drift,2) \
+            // float kernel = -6.181e-5 * pow(drift,3) + 0.0161 * pow(drift,2)
             //                     - 0.670 * drift + 8.533;
             // if (drift > 0) {
             //     correction[1] =  kernel + drift * (pow(deltaT, 2));
@@ -176,11 +192,6 @@ void loop()
         // Serial.print(pwr); Serial.print("\t");
 
         startMotor(dir,pwr, motorPWMPins[k], motorInPins[k][0], motorInPins[k][1], 90);
-        
-            // Serial.print(pos[k]);
-            // Serial.print(" \t ");
-            // Serial.print(correction[k]);
-            // Serial.print(" \t ");
 
     }
 
@@ -196,7 +207,7 @@ void loop()
 }
 
 void startMotor(int dir, int pwmVal, int enableMotor, int in1, int in2, int accelTo) {
-    // Set motor direction
+
     if (dir == 1) {
         digitalWrite(in1, HIGH);
         digitalWrite(in2, LOW);
@@ -208,11 +219,34 @@ void startMotor(int dir, int pwmVal, int enableMotor, int in1, int in2, int acce
         digitalWrite(in2, LOW);
     }
 
-    // Apply steady-state PWM
+    // Apply steady-state PWMh
     analogWrite(enableMotor, pwmVal);
+        
+    // long d = getDistance();
+
+    // if (d>20)
+    // {    // Set motor direction
+    //     if (dir == 1) {
+    //         digitalWrite(in1, HIGH);
+    //         digitalWrite(in2, LOW);
+    //     } else if (dir == -1) {
+    //         digitalWrite(in1, LOW);
+    //         digitalWrite(in2, HIGH);
+    //     } else {
+    //         digitalWrite(in1, LOW);
+    //         digitalWrite(in2, LOW);
+    //     }
+
+    //     // Apply steady-state PWMh
+    //     analogWrite(enableMotor, pwmVal);
+    // } else {
+    //     Serial.println(d);
+    //     Serial.println("obstacle detected ahead"); 
+    // }
 }
 
 void activateMotor(int dir, int in1, int in2) {
+
     // Set motor direction
     if (dir == 1) {
         digitalWrite(in1, HIGH);
@@ -225,7 +259,6 @@ void activateMotor(int dir, int in1, int in2) {
         digitalWrite(in2, LOW);
     }
 }
-
 
 void stopMotor(int motorNumber) {
     if (motorNumber == 0) {
@@ -285,4 +318,25 @@ void accelerateMotorsSimultaneously(const int* motorPins, int targetPWM, int acc
     analogWrite(motorPins[1], targetPWM);
     // Serial.println("Acceleration complete!");
     }
+}
+
+// Function to measure the distance using the ultrasonic sensor
+long getDistance() {
+  long duration, distance;
+  
+  // Send trigger pulse
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  
+  // Measure pulse duration
+  duration = pulseIn(ECHO_PIN, HIGH);
+  
+  // Calculate distance
+  distance = duration * 0.034 / 2; // in cm
+  
+  delay(10);
+  return distance;
 }
