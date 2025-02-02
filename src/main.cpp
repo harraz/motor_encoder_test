@@ -1,342 +1,144 @@
 #include <util/atomic.h> // For the ATOMIC_BLOCK macro
 #include <TrivialPID.h>
 #include <Arduino.h>
-#include <basicMPU6050.h> 
+#include <basicMPU6050.h>
+#include <TaskScheduler.h>
 
-// float calcDistance(int revs, float wheelDiameter = 3.4f); 
-
-void activateMotor(int dir, int in1, int in2);
-void startMotor(int dir, int pwmVal, int enableMotor, int in1, int in2, int accelTo);
-void stopMotor(int motor);
-void accelerateMotorsSimultaneously(const int* motorPins, int targetPWM, \
-                                    int accelStep, int delayMs);
+// Function prototypes
+void updateMotors();
+void checkObstacle();
 long getDistance();
+void startMotor(int dir, int pwmVal, int enableMotor, int in1, int in2);
+void stopMotor(int motorNumber);
+
+// Define Scheduler
+Scheduler runner;
+
+// Define Tasks
+Task taskMotors(20, TASK_FOREVER, &updateMotors);
+Task taskObstacle(200, TASK_FOREVER, &checkObstacle);
 
 #define NMOTORS 2
-
-const int TRIG_PIN = 23; // Trigger Pin
-const int ECHO_PIN = 22; // Echo Pin
+const int TRIG_PIN = 23; // Ultrasonic sensor trigger pin
+const int ECHO_PIN = 22; // Ultrasonic sensor echo pin
 
 TrivialPID pid[NMOTORS];
-TrivialPID driftCorrection;
 
-// Variables to track motor positions
-// volatile int motor1_position = 0;
-// volatile int motor2_position = 0;
-volatile int posi[] = {0,0}; 
-volatile float distanceTravelled = 0.0;
-
-volatile int correction[] = {0,0};
-
-bool motorsState [NMOTORS] = {false, false};
-bool motorsAccelState [NMOTORS] = {true, true};
-bool motorRunning = false;
-
-long prevT = 0;
-
-// const int encAPins[] = {18, 3};
-// const int encBPins[] = {2, 19};
-
+// Motor setup
 const int encAPins[] = {2, 19};
 const int encBPins[] = {18, 3};
+const int motorPWMPins[] = {9, 8}; // PWM pins for motors
+const int motorInPins[2][2] = { {44, 42}, {34, 32} }; // Direction pins
 
-const int motorPWMPins[] = {9, 8}; // blue wire then green wire
-// const int motorInPins[2][2] = {
-//                                 {42, 44},
-//                                 {32, 34}
-//                             };
+volatile int posi[] = {0, 0}; 
+bool obstacleDetected = false;
+long prevT = 0;
 
-const int motorInPins[2][2] = {
-                                {44, 42},
-                                {34, 32}
-                            };
-
-// Create MPU instance
-basicMPU6050<> imu;
-
-float prevZ=0;
-
-// Interrupt Service Routines (ISRs)
+// Interrupt Service Routine (ISR) for Encoders
 template <int m>
-void ISR_motor()
-{
+void ISR_motor() {
     int encB = digitalRead(encBPins[m]);
-    // motor1_position += (m1A > m1B) ? -1 : 1; // Clockwise or counter-clockwise
-
-    if (encB > 0)
-    {
-        posi[m]++;
-    }
-    else
-    {
-        posi[m]--;
-    }
+    posi[m] += (encB > 0) ? 1 : -1;
 }
-void setup()
-{       
-    // Optional debugging
-    // Serial.print("PWM: ");
-    // Serial.println(currentPWM);
+
+void setup() {
     Serial.begin(9600);
+    pinMode(TRIG_PIN, OUTPUT);
+    pinMode(ECHO_PIN, INPUT);
 
-    // // Set registers - Always required
-    // imu.setup();
+    for (int i = 0; i < NMOTORS; i++) {
+        pinMode(motorPWMPins[i], OUTPUT);
+        pinMode(motorInPins[i][0], OUTPUT);
+        pinMode(motorInPins[i][1], OUTPUT);
+    }
 
-    // // Initial calibration of gyro
-    // imu.setBias();
+    pinMode(encAPins[0], INPUT_PULLUP);
+    pinMode(encAPins[1], INPUT_PULLUP);
+    pinMode(encBPins[0], INPUT_PULLUP);
+    pinMode(encBPins[1], INPUT_PULLUP);
 
-    pinMode(motorPWMPins[0], OUTPUT);
-    pinMode(motorInPins[0][0], OUTPUT);
-    pinMode(motorInPins[0][1], OUTPUT);
-
-    pinMode(motorPWMPins[1], OUTPUT);
-    pinMode(motorInPins[1][0], OUTPUT);
-    pinMode(motorInPins[1][1], OUTPUT);
-
-    // Configure pins as inputs
-    pinMode(18, INPUT_PULLUP);
-    pinMode(19, INPUT_PULLUP);
-    pinMode(2, INPUT_PULLUP);
-    pinMode(3, INPUT_PULLUP);
-
-    pinMode(TRIG_PIN, OUTPUT); // Set trigger pin to output
-    pinMode(ECHO_PIN, INPUT); // Set echo pin to input
-
-    // pid[0].setParams(1.75, 0.2, 0.0, 135);
-    // pid[1].setParams(0.49999, 0.01, 0.0, 140);
+    attachInterrupt(digitalPinToInterrupt(encAPins[0]), ISR_motor<0>, RISING);
+    attachInterrupt(digitalPinToInterrupt(encAPins[1]), ISR_motor<1>, RISING);
 
     pid[0].setParams(0.399, 0.01, 0.0001, 140);
     pid[1].setParams(0.36, 0, 0.0001, 125);
 
-    delay(3000);
+    // Add tasks to the scheduler
+    runner.addTask(taskMotors);
+    runner.addTask(taskObstacle);
 
-    // Attach pin change interruptsu
-    attachInterrupt(digitalPinToInterrupt(encAPins[0]), ISR_motor<0>, RISING);
-    attachInterrupt(digitalPinToInterrupt(encAPins[1]), ISR_motor<1>, RISING);
-
-    Serial.println("Setup completed!");
-
-    // if (motorsAccelState[0])
-    // {
-    //     for(int k = 0; k < NMOTORS; k++){
-    //         activateMotor(1,motorInPins[k][0],motorInPins[k][1]);
-    //         // Serial.println(k);
-    //         // delay(2000);
-    //     }
-    //     accelerateMotorsSimultaneously(motorPWMPins, 100, 1, 5000);
-    //     // delay(1000);
-    //     // Serial.print("simultan fisnish");
-    //     motorsAccelState[0]=false;
-
-    //     // posi[0] = 0; posi[1]=0;
-    // }
-
+    // Enable tasks
+    taskMotors.enable();
+    taskObstacle.enable();
 }
 
-void loop()
-{
+void loop() {
+    runner.execute(); // Runs all scheduled tasks
+}
 
-    // // Update gyro calibration 
-    // imu.updateBias();
+// **Task 1: Motor Control**
+void updateMotors() {
+    if (obstacleDetected) {
+        stopMotor(0);
+        stopMotor(1);
+        Serial.println("Obstacle detected! Stopping motors.");
+        return;
+    }
 
-    // prevZ -= imu.gz();
-    // Serial.print(prevZ);
-    // Serial.print(" \t ");
-
-    // set target position
     int target[NMOTORS] = {2400, 2400};
-    //   int target = 250*sin(prevT/1e6);
-
-    // time difference
     long currT = micros();
-    float deltaT = ((float) (currT - prevT))/( 1.0e6 );
+    float deltaT = ((float)(currT - prevT)) / 1.0e6;
     prevT = currT;
 
-    // int pos = 0;
     int pos[NMOTORS];
-    // int correction[] = {0,0};
-    int drift =0;
 
-    ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
-    {
-        for(int k = 0; k < NMOTORS; k++){
-            pos[k] = posi[k];
-
-            // Serial.print(pos[k]); Serial.print("\t");
-
-            drift = (posi[0] - posi[1]) ; 
-
-            // // // -6.790e-5 x^3 + 0.014 x^2 - 0.494 x + 8.767
-            // float kernel = -6.181e-5 * pow(drift,3) + 0.0161 * pow(drift,2)
-            //                     - 0.670 * drift + 8.533;
-            // if (drift > 0) {
-            //     correction[1] =  kernel + drift * (pow(deltaT, 2));
-            //     correction[0] =  kernel - drift / (pow(deltaT, 2));
-            // }
-            
-            // Serial.print(kernel); Serial.print("\t");
-            // Serial.print(drift); Serial.print("\t");
+    // **Protect posi[] from ISR modifications**
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        for (int k = 0; k < NMOTORS; k++) {
+            pos[k] = posi[k]; // Read encoder values safely
         }
     }
 
-
-    // loop through the motors
-    for(int k = 0; k < NMOTORS; k++) {
-
+    for (int k = 0; k < NMOTORS; k++) {
         int pwr, dir;
-        // evaluate the control signal
-        pid[k].errorValue(pos[k],target[k],deltaT,pwr,dir);
-
-        // Serial.print(correction[k]); Serial.print("\t");
-        // pos[k]=pos[k]+correction[k];
-        // Serial.print(pwr); Serial.print("\t");
-
-        startMotor(dir,pwr, motorPWMPins[k], motorInPins[k][0], motorInPins[k][1], 90);
-
+        pid[k].errorValue(pos[k], target[k], deltaT, pwr, dir);
+        startMotor(dir, pwr, motorPWMPins[k], motorInPins[k][0], motorInPins[k][1]);
     }
-
-    for(int k = 0; k < NMOTORS; k++){
-        Serial.print(target[k]);
-        Serial.print(" \t ");
-        Serial.print(pos[k]);
-        Serial.print(" \t ");
-    }
-
-    Serial.println();
-
 }
 
-void startMotor(int dir, int pwmVal, int enableMotor, int in1, int in2, int accelTo) {
-
-    if (dir == 1) {
-        digitalWrite(in1, HIGH);
-        digitalWrite(in2, LOW);
-    } else if (dir == -1) {
-        digitalWrite(in1, LOW);
-        digitalWrite(in2, HIGH);
+// **Task 2: Check for Obstacles**
+void checkObstacle() {
+    long distance = getDistance();
+    if (distance < 20) {
+        obstacleDetected = true;
+        Serial.println("Obstacle detected!");
     } else {
-        digitalWrite(in1, LOW);
-        digitalWrite(in2, LOW);
+        obstacleDetected = false;
     }
+}
 
-    // Apply steady-state PWMh
+// **Motor Control Functions**
+void startMotor(int dir, int pwmVal, int enableMotor, int in1, int in2) {
+    digitalWrite(in1, dir == 1);
+    digitalWrite(in2, dir == -1);
     analogWrite(enableMotor, pwmVal);
-        
-    // long d = getDistance();
-
-    // if (d>20)
-    // {    // Set motor direction
-    //     if (dir == 1) {
-    //         digitalWrite(in1, HIGH);
-    //         digitalWrite(in2, LOW);
-    //     } else if (dir == -1) {
-    //         digitalWrite(in1, LOW);
-    //         digitalWrite(in2, HIGH);
-    //     } else {
-    //         digitalWrite(in1, LOW);
-    //         digitalWrite(in2, LOW);
-    //     }
-
-    //     // Apply steady-state PWMh
-    //     analogWrite(enableMotor, pwmVal);
-    // } else {
-    //     Serial.println(d);
-    //     Serial.println("obstacle detected ahead"); 
-    // }
-}
-
-void activateMotor(int dir, int in1, int in2) {
-
-    // Set motor direction
-    if (dir == 1) {
-        digitalWrite(in1, HIGH);
-        digitalWrite(in2, LOW);
-    } else if (dir == -1) {
-        digitalWrite(in1, LOW);
-        digitalWrite(in2, HIGH);
-    } else {
-        digitalWrite(in1, LOW);
-        digitalWrite(in2, LOW);
-    }
 }
 
 void stopMotor(int motorNumber) {
-    if (motorNumber == 0) {
-        // Stop Motor A
-        digitalWrite(motorInPins[0][0], LOW);
-        digitalWrite(motorInPins[0][1], LOW);
-        analogWrite(motorPWMPins[0], 0);
-        motorsState[motorNumber]=false;
-    } else if (motorNumber == 1) {
-        // Stop Motor B
-        digitalWrite(motorInPins[1][0], LOW);
-        digitalWrite(motorInPins[1][1], LOW);
-        analogWrite(motorPWMPins[1], 0);
-
-        motorsState[motorNumber]=false;
-    }
+    digitalWrite(motorInPins[motorNumber][0], LOW);
+    digitalWrite(motorInPins[motorNumber][1], LOW);
+    analogWrite(motorPWMPins[motorNumber], 0);
 }
 
-/// @brief function that returns distnace travelled 
-/// @param revs number of revolution at the function call
-/// @param wheelDiameter diameter of the wheel 
-/// @return would be distnace travelled 
-float calcDistance(int revs, float wheelDiameter = 3.4f) {
-
-    // float wheelDiameter = 4.3f;
-    float wheelCircumfetence = PI * wheelDiameter;
-
-    return (revs * wheelCircumfetence);
-}
-
-void accelerateMotorsSimultaneously(const int* motorPins, int targetPWM, int accelStep, int delayMs) {
-    int currentPWM = 0;
-
-    ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
-
-    // Gradually increase PWM for both motors
-{    while (currentPWM < targetPWM) {
-        currentPWM += accelStep;
-        if (currentPWM > targetPWM) {
-            currentPWM = targetPWM;  // Prevent overshooting
-        }
-
-        // Apply the same PWM to both motors
-        analogWrite(motorPins[0], currentPWM);
-        analogWrite(motorPins[1], currentPWM);
-
-        // Debugging output
-        // Serial.print("Accelerating motors with PWM: ");
-        // Serial.println(currentPWM);
-
-        // Delay to control ramp-up speed
-        delay(delayMs);
-    }
-
-    // Final PWM to ensure motors are running at the target speed
-    analogWrite(motorPins[0], targetPWM);
-    analogWrite(motorPins[1], targetPWM);
-    // Serial.println("Acceleration complete!");
-    }
-}
-
-// Function to measure the distance using the ultrasonic sensor
+// **Ultrasonic Sensor Function**
 long getDistance() {
-  long duration, distance;
-  
-  // Send trigger pulse
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-  
-  // Measure pulse duration
-  duration = pulseIn(ECHO_PIN, HIGH);
-  
-  // Calculate distance
-  distance = duration * 0.034 / 2; // in cm
-  
-  delay(10);
-  return distance;
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, LOW);
+
+    long duration = pulseIn(ECHO_PIN, HIGH);
+    return duration * 0.034 / 2; // Distance in cm
 }
+                  
